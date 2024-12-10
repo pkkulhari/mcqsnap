@@ -1,0 +1,10 @@
+[project]
+name = "screenshotai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aisuite[openai]>=0.1.6",
+    "pyside6>=6.8.1",
+]
