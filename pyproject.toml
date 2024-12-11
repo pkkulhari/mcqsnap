@@ -5,8 +5,8 @@ description = "AI-powered tool to capture screenshots of multiple-choice questio
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "aisuite[openai]>=0.1.6",
     "pyside6>=6.8.1",
-    "pysuite[openai]>=0.4.0",
 ]
 
 [dependency-groups]
