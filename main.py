@@ -2,7 +2,14 @@ import sys
 import os
 from datetime import datetime
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTextBrowser, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QTextBrowser,
+    QMessageBox,
+)
 from PySide6.QtGui import QPainter, QColor, QCursor
 from PySide6.QtCore import Qt, QRect, QBuffer, QByteArray, QIODevice
 import aisuite as ai
@@ -23,6 +30,7 @@ system_message = {
     ),
 }
 
+
 class ResponseWindow(QWidget):
     def __init__(self, response_text):
         super().__init__()
@@ -30,13 +38,13 @@ class ResponseWindow(QWidget):
         self.setGeometry(100, 100, 600, 400)
 
         layout = QVBoxLayout()
-        
+
         # Create text browser for response with markdown support
         response_text_browser = QTextBrowser()
         response_text_browser.setOpenExternalLinks(True)
         response_text_browser.setMarkdown(response_text)
         response_text_browser.setStyleSheet("QTextBrowser { padding: 10px; }")
-        
+
         layout.addWidget(response_text_browser)
         self.setLayout(layout)
 
@@ -55,9 +63,6 @@ class ScreenshotWindow(QMainWindow):
         self.selection_started = False
         self.start_pos = None
         self.end_pos = None
-
-        # Ensure the "screenshots" directory exists
-        os.makedirs("screenshots", exist_ok=True)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -113,7 +118,7 @@ class ScreenshotWindow(QMainWindow):
         if self.start_pos and self.end_pos:
             # Show loading cursor
             QApplication.setOverrideCursor(Qt.WaitCursor)
-            
+
             selection_rect = QRect(self.start_pos, self.end_pos).normalized()
             cropped_pixmap = self.pixmap.copy(selection_rect)
 
@@ -141,19 +146,19 @@ class ScreenshotWindow(QMainWindow):
                         },
                     ],
                 )
-                
+
                 # Restore cursor
                 QApplication.restoreOverrideCursor()
-                
+
                 # Show response in new window
                 response_text = response.choices[0].message.content
                 self.response_window = ResponseWindow(response_text)
                 self.response_window.show()
-                
+
             except Exception as e:
                 QApplication.restoreOverrideCursor()
                 QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
-            
+
             self.close()
 
 
