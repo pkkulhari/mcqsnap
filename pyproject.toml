@@ -1,10 +1,15 @@
 [project]
-name = "screenshotai"
+name = "mcqsnap"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered tool to capture screenshots of multiple-choice questions (MCQs) and instantly identify the correct answer."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "aisuite[openai]>=0.1.6",
     "pyside6>=6.8.1",
+    "pysuite[openai]>=0.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "nuitka>=2.5.6",
 ]
