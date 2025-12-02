@@ -1,10 +1,9 @@
 import io
+import json
 import sys
-import os
 from pathlib import Path
 
 from PIL import Image
-import pytesseract
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -13,261 +12,179 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QMessageBox,
     QInputDialog,
+    QGraphicsDropShadowEffect,
 )
-from PySide6.QtGui import QPainter, QColor
-from PySide6.QtCore import Qt, QRect, QBuffer, QIODevice, QStandardPaths
-from openai import OpenAI
+from PySide6.QtGui import QPainter, QColor, QFont
+from PySide6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, QStandardPaths
+from google import genai
+
+CONFIG_PATH = (
+    Path(QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation))
+    / "mcqsnap"
+    / "config.json"
+)
+
+SYSTEM_PROMPT = """You are an MCQ solver. Analyze the image and identify the question and correct answer.
+Format your response as:
+**Question:** [The question text]
+
+**Answer:** [Option number]) [Answer text]
+"""
 
 
-class ConfigManager:
-    """Manages application configuration and API key storage."""
+def load_api_key() -> str | None:
+    if CONFIG_PATH.exists():
+        return json.loads(CONFIG_PATH.read_text()).get("api_key")
+    return None
 
-    @staticmethod
-    def get_config_dir() -> Path:
-        """Get the application's configuration directory."""
-        config_dir = Path(
-            QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-        )
-        config_dir.mkdir(parents=True, exist_ok=True)
-        return config_dir
 
-    @classmethod
-    def get_api_key_path(cls) -> Path:
-        """Get the path to the API key file."""
-        return cls.get_config_dir() / "openai_api_key.txt"
+def save_api_key(api_key: str):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps({"api_key": api_key}))
 
-    @classmethod
-    def load_api_key(cls) -> str | None:
-        """Load the stored API key."""
 
-        if os.environ.get("OPENAI_API_KEY"):
-            return os.environ.get("OPENAI_API_KEY")
-
-        api_key_path = cls.get_api_key_path()
-        return api_key_path.read_text().strip() if api_key_path.exists() else None
-
-    @classmethod
-    def save_api_key(cls, api_key: str) -> None:
-        """Save the API key to the configuration file."""
-        api_key_path = cls.get_api_key_path()
-        api_key_path.write_text(api_key)
-
-    @classmethod
-    def initialize_api_key(cls) -> str:
-        """Interactively obtain and validate the API key."""
-        api_key = cls.load_api_key()
-
-        if not api_key:
-            dialog = QInputDialog()
-            dialog.setWindowTitle("OpenAI API Key")
-            dialog.setLabelText("Please enter your OpenAI API key:")
-            dialog.resize(400, dialog.height())
-
-            if dialog.exec() == QInputDialog.Accepted:
-                api_key = dialog.textValue()
-            else:
-                api_key = ""
-
-            if not api_key:
-                QMessageBox.critical(
-                    None, "Error", "OpenAI API key is required to use this application."
-                )
-                sys.exit(1)
-
-            cls.save_api_key(api_key)
-
+def get_api_key() -> str:
+    api_key = load_api_key()
+    if api_key:
         return api_key
 
+    dialog = QInputDialog()
+    dialog.setWindowTitle("MCQSnap - API Key")
+    dialog.setLabelText("Enter your Gemini API key:")
+    dialog.resize(450, 150)
 
-class AIHelper:
-    """Helper class for AI interactions."""
+    if dialog.exec() == QInputDialog.Accepted and dialog.textValue().strip():
+        api_key = dialog.textValue().strip()
+        save_api_key(api_key)
+        return api_key
 
-    def __init__(self, model: str = "gpt-4.1-mini", api_key: str = None):
-        self.model = model
-        self.client = OpenAI(api_key=api_key)
-        self.system_message = {
-            "role": "system",
-            "content": (
-                "You are an expert in solving multiple-choice questions (MCQs). The user will provide you with text extracted from an MCQ image. "
-                "Your task is to identify the question and the correct option. Please give the correct option in the following format:"
-                "Question: [Extracted question]"
-                "<br />"
-                "Answer: **[Number of the correct option]) [Correct option text]**"
-            ),
-        }
+    QMessageBox.critical(None, "Error", "API key is required.")
+    sys.exit(1)
 
-    def analyze_mcq(self, image_data: bytes) -> str:
-        """Analyze the multiple-choice question using OCR and AI."""
-        try:
-            # Convert QPixmap bytes to PIL Image
-            image = Image.open(io.BytesIO(image_data))
 
-            # Perform OCR
-            extracted_text = pytesseract.image_to_string(image, lang="eng")
-
-            # Get AI analysis
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    self.system_message,
-                    {
-                        "role": "user",
-                        "content": f"Here is the text extracted from the MCQ image:\n\n{extracted_text}",
-                    },
-                ],
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            raise RuntimeError(f"Analysis failed: {e}")
+def analyze_image(client: genai.Client, image_data: bytes) -> str:
+    image = Image.open(io.BytesIO(image_data))
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[SYSTEM_PROMPT, image],
+    )
+    return response.text
 
 
 class ResponseWindow(QWidget):
-    """Window to display AI response."""
-
-    def __init__(self, response_text: str, ai_helper: AIHelper, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Answer")
-        self.setGeometry(100, 100, 600, 400)
-        self.ai_helper = ai_helper
+    def __init__(self, text: str):
+        super().__init__()
+        self.setWindowTitle("MCQSnap - Answer")
+        self.setGeometry(100, 100, 650, 450)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
 
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
 
-        response_text_browser = QTextBrowser()
-        response_text_browser.setOpenExternalLinks(True)
-        response_text_browser.setMarkdown(response_text)
-        response_text_browser.setStyleSheet(
-            "QTextBrowser { padding: 10px; font-size: 18px; }"
-        )
+        browser = QTextBrowser()
+        browser.setMarkdown(text)
+        browser.setOpenExternalLinks(True)
 
-        layout.addWidget(response_text_browser)
-        self.setLayout(layout)
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(30)
+        shadow.setColor(QColor(99, 102, 241, 80))
+        shadow.setOffset(0, 4)
+        browser.setGraphicsEffect(shadow)
+
+        layout.addWidget(browser)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.close()
 
-    def process_screenshot(self):
-        if self.start_pos and self.end_pos:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-
-            selection_rect = QRect(self.start_pos, self.end_pos).normalized()
-            cropped_pixmap = self.pixmap.copy(selection_rect)
-
-            buffer = QBuffer()
-            buffer.open(QIODevice.WriteOnly)
-            cropped_pixmap.save(buffer, "PNG")
-            image_data = buffer.data().data()
-
-            try:
-                response_text = self.ai_helper.analyze_mcq(image_data)
-                QApplication.restoreOverrideCursor()
-
-                # Create response window with parent reference
-                self.response_window = ResponseWindow(
-                    response_text, self.ai_helper, self
-                )
-                self.response_window.show()
-
-            except Exception as e:
-                QApplication.restoreOverrideCursor()
-                QMessageBox.critical(self, "Error", str(e))
-
-            self.close()
-
 
 class ScreenshotWindow(QMainWindow):
-    """Main window for screenshot selection and processing."""
-
-    def __init__(self, ai_helper: AIHelper):
+    def __init__(self, client: genai.Client):
         super().__init__()
-        self.ai_helper = ai_helper
+        self.client = client
+        self.start_pos = self.end_pos = None
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.showFullScreen()
-
-        screen = QApplication.primaryScreen()
-        self.pixmap = screen.grabWindow(0)
-
-        self.selection_started = False
-        self.start_pos = None
-        self.end_pos = None
+        self.setCursor(Qt.CrossCursor)
+        self.pixmap = QApplication.primaryScreen().grabWindow(0)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.selection_started = True
-            self.start_pos = event.pos()
-            self.end_pos = self.start_pos
+            self.start_pos = self.end_pos = event.pos()
 
     def mouseMoveEvent(self, event):
-        if self.selection_started:
+        if self.start_pos:
             self.end_pos = event.pos()
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.selection_started:
-            self.selection_started = False
-            self.process_screenshot()
+        if event.button() == Qt.LeftButton and self.start_pos:
+            self.process_selection()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
             self.close()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.drawPixmap(self.rect(), self.pixmap)
-
-        overlay_color = QColor(0, 0, 0, 100)
-        painter.fillRect(self.rect(), overlay_color)
-
-        cursor = self.cursor()
-        cursor.setShape(Qt.CrossCursor)
-        self.setCursor(cursor)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
 
         if self.start_pos and self.end_pos:
-            selection_rect = QRect(self.start_pos, self.end_pos).normalized()
-            painter.drawPixmap(selection_rect, self.pixmap, selection_rect)
+            rect = QRect(self.start_pos, self.end_pos).normalized()
+            painter.drawPixmap(rect, self.pixmap, rect)
 
             pen = painter.pen()
-            pen.setColor(Qt.white)
-            pen.setWidth(2)
+            pen.setColor(QColor(99, 102, 241))
+            pen.setWidth(3)
             painter.setPen(pen)
-            painter.drawRect(selection_rect)
+            painter.drawRect(rect)
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+            # Draw dimensions
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.setPen(QColor(255, 255, 255, 200))
+            painter.drawText(
+                rect.bottomRight() + QPoint(-60, 20),
+                f"{rect.width()} × {rect.height()}",
+            )
+
+    def process_selection(self):
+        if not self.start_pos or not self.end_pos:
+            return
+
+        rect = QRect(self.start_pos, self.end_pos).normalized()
+        if rect.width() < 10 or rect.height() < 10:
             self.close()
+            return
 
-    def process_screenshot(self):
-        if self.start_pos and self.end_pos:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        cropped = self.pixmap.copy(rect)
 
-            selection_rect = QRect(self.start_pos, self.end_pos).normalized()
-            cropped_pixmap = self.pixmap.copy(selection_rect)
+        buffer = QBuffer()
+        buffer.open(QIODevice.WriteOnly)
+        cropped.save(buffer, "PNG")
 
-            buffer = QBuffer()
-            buffer.open(QIODevice.WriteOnly)
-            cropped_pixmap.save(buffer, "PNG")
-            image_data = buffer.data().data()
+        try:
+            response = analyze_image(self.client, buffer.data().data())
+            QApplication.restoreOverrideCursor()
+            self.response_window = ResponseWindow(response)
+            self.response_window.show()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(None, "Error", str(e))
 
-            try:
-                response_text = self.ai_helper.analyze_mcq(image_data)
-                QApplication.restoreOverrideCursor()
-
-                self.response_window = ResponseWindow(response_text, self.ai_helper)
-                self.response_window.show()
-
-            except Exception as e:
-                QApplication.restoreOverrideCursor()
-                QMessageBox.critical(self, "Error", str(e))
-
-            self.close()
+        self.close()
 
 
 def main():
-    """Main application entry point."""
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
 
-    api_key = ConfigManager.initialize_api_key()
-    ai_helper = AIHelper(api_key=api_key)
-    window = ScreenshotWindow(ai_helper)
+    api_key = get_api_key()
+    client = genai.Client(api_key=api_key)
+
+    window = ScreenshotWindow(client)
     window.show()
 
     sys.exit(app.exec())
